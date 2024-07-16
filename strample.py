@@ -26,7 +26,7 @@ For various options (sort key, sample size, number of quantiles, ascending vs. d
 # TODO: Include basic stats, histogram etc? Integrate with pandas-profiling?
 # TODO: Allow span highlights (e.g., for QA)?
 # TODO: Allow more flexible quantile specification, e.g., 1,4,90,4,1
-
+# TODO: Write seed to html.
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='For .csv data, based on a numerical column --key, generate a simple HTML page with a sample per quantile.')
