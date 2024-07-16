@@ -13,11 +13,11 @@ import random
 
 If you have a .csv file that you want to sample 'stratified' based on the first numerical column, do:
 
-$ cat some_csv_file.csv | sampleviz 
+$ cat some_csv_file.csv | strample 
 
 Another example:
 
-$ sampleviz some_csv_file.csv --descending --quantiles 30 --key score
+$ strample some_csv_file.csv --descending --quantiles 30 --key score
 
 For various options (sort key, sample size, number of quantiles, ascending vs. descending) see the help.
 
