@@ -9,6 +9,9 @@ import tempfile
 from typing import List, Union
 import random
 import functools
+import itertools
+import json
+import io
 
 """
 
@@ -25,14 +28,11 @@ For various options (sort key, sample size, number of quantiles, ascending vs. d
 """
 
 # TODO: Include basic stats, histogram etc? Integrate with pandas-profiling? And/or streamlit?
-# TODO: Allow span highlights (e.g., for QA)?
 # TODO: Allow more flexible quantile specification, e.g., 1,4,90,4,1
-# TODO: Write seed to html.
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='For .csv data, based on a numerical column --key, generate a simple HTML page with a sample per quantile.')
-    parser.add_argument('csv', nargs='?', type=argparse.FileType('r'), default=sys.stdin,
-                        help='Input CSV file or stdin')
+    parser.add_argument('file', nargs='?', type=argparse.FileType('r'), default=sys.stdin, help='Input csv or json file or stdin')
     parser.add_argument('-k', '--key', type=str, default=None, help='Which value to sort, color and stratify by; first numerical column by default.')
     parser.add_argument('-n', '--sample_size', type=int, default=20, help='Number of rows per sub-table')
     parser.add_argument('-q', '--quantiles', type=int, default=10, help='Number of quantiles')
@@ -62,8 +62,12 @@ def main():
                                   num_quantiles=args.quantiles,
                                   key=args.key,
                                   ascending=not args.descending,
-                                  span=args.span)
-    data = pd.read_csv(args.csv)
+                                  span=args.span,
+                                  seed=args.seed)
+
+    file, is_jsonl = peek_if_jsonl(args.file)
+
+    data = pd.read_json(file, orient='records', lines=True) if is_jsonl else pd.read_csv(file)
 
     if args.key is None:
         args.key = get_first_numerical_column(data)
@@ -77,6 +81,18 @@ def main():
             url = 'file://' + f.name
             f.write(html_output)
         webbrowser.open(url)
+
+
+def peek_if_jsonl(file):
+    firstline = next(file).strip()
+    file = StringIteratorIO(itertools.chain([firstline + '\n'], file))
+    try:
+        d = json.loads(firstline)
+        if isinstance(d, dict):
+            return file, True
+    except json.JSONDecodeError:
+        pass
+    return file, False
 
 
 def get_first_numerical_column(data: pd.DataFrame) -> Union[None, int]:
@@ -132,8 +148,8 @@ def sample_to_html(sample: pd.DataFrame, span: tuple):
     return html
 
 
-def generate_html(data: pd.DataFrame, sample_size: int, num_quantiles: int, key: str, ascending: bool = True, span: tuple = None):
-    html = ["<html><body>"]
+def generate_html(data: pd.DataFrame, sample_size: int, num_quantiles: int, key: str, ascending: bool = True, span: tuple = None, seed=None):
+    html = [f"<html><body><h1>Stratified samples (seed: {seed}; {len(data)} rows)</h1>"]
 
     bottom = bottom_html(data, sample_size, key, span)
     top = top_html(data, sample_size, key, span)
@@ -143,6 +159,64 @@ def generate_html(data: pd.DataFrame, sample_size: int, num_quantiles: int, key:
 
     html.append("</body></html>")
     return "".join(html)
+
+
+
+class StringIteratorIO(io.TextIOBase):
+    """
+    https://stackoverflow.com/questions/12593576/adapt-an-iterator-to-behave-like-a-file-like-object-in-python
+    """
+
+    def __init__(self, iter):
+        self._iter = iter
+        self._left = ''
+
+    def readable(self):
+        return True
+
+    def _read1(self, n=None):
+        while not self._left:
+            try:
+                self._left = next(self._iter)
+            except StopIteration:
+                break
+        ret = self._left[:n]
+        self._left = self._left[len(ret):]
+        return ret
+
+    def read(self, n=None):
+        l = []
+        if n is None or n < 0:
+            while True:
+                m = self._read1()
+                if not m:
+                    break
+                l.append(m)
+        else:
+            while n > 0:
+                m = self._read1(n)
+                if not m:
+                    break
+                n -= len(m)
+                l.append(m)
+        return ''.join(l)
+
+    def readline(self):
+        l = []
+        while True:
+            i = self._left.find('\n')
+            if i == -1:
+                l.append(self._left)
+                try:
+                    self._left = next(self._iter)
+                except StopIteration:
+                    self._left = ''
+                    break
+            else:
+                l.append(self._left[:i+1])
+                self._left = self._left[i+1:]
+                break
+        return ''.join(l)
 
 
 if __name__ == "__main__":
