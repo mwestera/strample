@@ -23,7 +23,7 @@ Another example:
 
 $ strample some_csv_file.csv --descending --quantiles 30 --key score
 
-For various options (sort key, sample size, number of quantiles, ascending vs. descending) see the help.
+For various options (sort key, sample size, number of quantiles, ascending vs. descending, per-token coloration) see the help.
 
 """
 
