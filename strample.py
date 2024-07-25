@@ -39,11 +39,15 @@ def parse_arguments():
     parser.add_argument('--seed', type=int, default=None, help='Random seed.')
     parser.add_argument('--out', type=argparse.FileType('w'), default=None, help='Output file for .html; otherwise served in webbrowser.')
     parser.add_argument('--descending', action='store_true', required=False, help='To show samples in descending order.')
-    parser.add_argument('-s', '--span', type=str, required=False, help='To highlight spans, a csv triple of field names: text,start,end')
+    parser.add_argument('-s', '--span', type=str, required=False, help='To highlight a single span, a csv triple of field names: text,start,end')
+    parser.add_argument('--tokens', type=str, required=False, help='To highlight individual tokens by score, a csv triple of field names: text,token_scores,token_spans')
     args = parser.parse_args()
     if args.span:
-        key, start, end = args.span.split(',')
-        args.span = (key, start, end)
+        text, start, end = args.span.split(',') # TODO make proper csv
+        args.span = (text, start, end)
+    if args.tokens:
+        text, scores, spans = args.tokens.split(',')
+        args.tokens = (text, scores, spans)
     return args
 
 
@@ -63,10 +67,10 @@ def main():
                                   key=args.key,
                                   ascending=not args.descending,
                                   span=args.span,
+                                  tokens=args.tokens,
                                   seed=args.seed)
 
     file, is_jsonl = peek_if_jsonl(args.file)
-
     data = pd.read_json(file, orient='records', lines=True) if is_jsonl else pd.read_csv(file)
 
     if args.key is None:
@@ -84,10 +88,11 @@ def main():
 
 
 def peek_if_jsonl(file):
-    firstline = next(file).strip()
-    file = StringIteratorIO(itertools.chain([firstline + '\n'], file))
+    file, peekfile = itertools.tee(file)
+    firstline = next(peekfile)
+    file = StringIteratorIO(file)
     try:
-        d = json.loads(firstline)
+        d = json.loads(firstline.strip())
         if isinstance(d, dict):
             return file, True
     except json.JSONDecodeError:
@@ -103,25 +108,25 @@ def get_first_numerical_column(data: pd.DataFrame) -> Union[None, int]:
     return numerical_columns[0]
 
 
-def bottom_html(data: pd.DataFrame, sample_size: int, key: str, span: tuple) -> List[str]:
-    sample = data.nsmallest(sample_size, key).sort_values(by=key)
+def bottom_html(data: pd.DataFrame, sample_size: int, key: str, ascending: bool, span: tuple, tokens: tuple) -> List[str]:
+    sample = data.nsmallest(sample_size, key).sort_values(by=key, ascending=ascending)
     html = [
         f"<h2>Bottom {sample_size} rows</h2>",
-        sample_to_html(sample, span)
+        sample_to_html(sample, span, tokens)
     ]
     return html
 
 
-def top_html(data: pd.DataFrame, sample_size: int, key: str, span: tuple) -> List[str]:
-    sample = data.nlargest(sample_size, key).sort_values(by=key)
+def top_html(data: pd.DataFrame, sample_size: int, key: str, ascending: bool, span: tuple, tokens: tuple) -> List[str]:
+    sample = data.nlargest(sample_size, key).sort_values(by=key, ascending=ascending)
     html = [
         f"<h2>Top {sample_size} rows</h2>",
-        sample_to_html(sample, span),
+        sample_to_html(sample, span, tokens),
     ]
     return html
 
 
-def quantiles_html(data: pd.DataFrame, num_quantiles: int, sample_size: int, key: str, ascending: bool, span: tuple) -> List[str]:
+def quantiles_html(data: pd.DataFrame, num_quantiles: int, sample_size: int, key: str, ascending: bool, span: tuple, tokens: tuple) -> List[str]:
     html = []
 
     quantiles = np.linspace(0, 1, num_quantiles + 1)
@@ -129,37 +134,66 @@ def quantiles_html(data: pd.DataFrame, num_quantiles: int, sample_size: int, key
         q_start = quantiles[i]
         q_end = quantiles[i + 1]
         quantile_data = data[(data[key] > data[key].quantile(q_start)) & (data[key] <= data[key].quantile(q_end))]
-        sample = quantile_data.sample(min(sample_size, len(quantile_data)), random_state=1).sort_values(by=key)
+        sample = quantile_data.sample(min(sample_size, len(quantile_data)), random_state=1).sort_values(by=key, ascending=ascending)
         if ascending:
             html.append(f"<h2>Quantile {q_start * 100:.0f}-{q_end * 100:.0f}%</h2>")
         else:
             html.append(f"<h2>Quantile {q_end * 100:.0f}-{q_start * 100:.0f}%</h2>")
 
-        html.append(sample_to_html(sample, span))
+        html.append(sample_to_html(sample, span, tokens))
 
     return html
 
 
-def sample_to_html(sample: pd.DataFrame, span: tuple):
-    text_column, start_column, end_column = span
-    sample[text_column] = [f'{t[:start]}<span style="background-color:#ff0;">{t[start:end]}</span>{t[end:]}' for t, start, end in zip(sample[text_column], sample[start_column], sample[end_column])]
+def colormap(score):
+    r = 'f'
+    g = 'f'
+    b = hex(round((1-score) * 15))[-1]
+    return f'#{r}{g}{b}'
 
+
+def sample_to_html(sample: pd.DataFrame, span: tuple, tokens: tuple):
+    for i, row in sample.iterrows():
+        markers = {}
+        if span:
+            spanmarkers = markers.setdefault(span[0], [])
+            spanmarkers.append((row[span[1]], '<u>'))
+            spanmarkers.append((row[span[2]], '</u>'))
+        if tokens:
+            tokenmarkers = markers.setdefault(tokens[0], [])
+            for score, (start, end) in zip(row[tokens[1]], row[tokens[2]]):
+                tokenmarkers.append((start, f'<span style="background-color:{colormap(score)};">'))
+                tokenmarkers.append((end, f'</span>'))
+        for text_column, markers in markers.items():
+            text = row[text_column]
+            marked_text = []
+            markers = [(0, '')] + markers + [(len(text), '')]
+            markers.sort(reverse=True)
+            for (prev_offset, _), (offset, marker) in zip(markers, markers[1:]):
+                marked_text.append(text[offset:prev_offset])
+                marked_text.append(marker)
+            sample.at[i, text_column] = ''.join(reversed(marked_text))
+    columns_to_remove = []
+    if span:
+        columns_to_remove += [span[1], span[2]]
+    if tokens:
+        columns_to_remove += [tokens[1], tokens[2]]
+    sample = sample[[col for col in sample.columns if col not in columns_to_remove]]
     html = sample.to_html(index=False).replace('&lt;', '<').replace('&gt;', '>')
     return html
 
 
-def generate_html(data: pd.DataFrame, sample_size: int, num_quantiles: int, key: str, ascending: bool = True, span: tuple = None, seed=None):
-    html = [f"<html><body><h1>Stratified samples (seed: {seed}; {len(data)} rows)</h1>"]
+def generate_html(data: pd.DataFrame, sample_size: int, num_quantiles: int, key: str, ascending: bool = True, span: tuple = None, tokens: tuple = None, seed=None):
+    html = [f"<html><body><h1>Strample: Random samples stratified by {key} (total {len(data)} rows; seed: {seed})</h1>"]
 
-    bottom = bottom_html(data, sample_size, key, span)
-    top = top_html(data, sample_size, key, span)
+    bottom = bottom_html(data, sample_size, key, ascending, span, tokens)
+    top = top_html(data, sample_size, key, ascending, span, tokens)
     html.extend(bottom if ascending else top)
-    html.extend(quantiles_html(data, num_quantiles, sample_size, key, ascending, span))
+    html.extend(quantiles_html(data, num_quantiles, sample_size, key, ascending, span, tokens))
     html.extend(top if ascending else bottom)
 
     html.append("</body></html>")
     return "".join(html)
-
 
 
 class StringIteratorIO(io.TextIOBase):
