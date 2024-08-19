@@ -42,5 +42,10 @@ creates a html file looking like this:
 
 ![example_qa.png](example_qa.png)
 
+By adding `--csv_out` you request that the samples additionally be written to a `.csv` file, in which case an extra column `strample` is added to indicate from which quantile each row came.
+
+```bash
+$ strample some_csv_file.csv --descending --quantiles 30 --key score --csv_out qa_sample.csv
+```
 
 For the various options (sort key, sample size, number of quantiles, ascending vs. descending, highlighting spans and tokens) see the help.
