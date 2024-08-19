@@ -6,7 +6,7 @@ import sys
 import argparse
 import webbrowser
 import tempfile
-from typing import List, Union
+from typing import List, Union, Tuple
 import random
 import functools
 import itertools
@@ -108,26 +108,26 @@ def get_first_numerical_column(data: pd.DataFrame) -> Union[None, int]:
     return numerical_columns[0]
 
 
-def bottom_html(data: pd.DataFrame, sample_size: int, key: str, ascending: bool, span: tuple, tokens: tuple) -> List[str]:
-    sample = data.nsmallest(sample_size, key).sort_values(by=key, ascending=ascending)
-    html = [
-        f"<h2>Bottom {sample_size} rows</h2>",
-        sample_to_html(sample, span, tokens)
-    ]
-    return html
+def make_samples(data: pd.DataFrame, num_quantiles: int, sample_size: int, key: str, ascending: bool) -> Tuple[List[Tuple[float, float, pd.DataFrame]], pd.DataFrame, pd.DataFrame]:
+    top = top_sample(data, sample_size, key, ascending)
+    quans = quantile_samples(data, num_quantiles, sample_size, key, ascending)
+    bot = bottom_sample(data, sample_size, key, ascending)
+
+    return quans, top, bot
 
 
-def top_html(data: pd.DataFrame, sample_size: int, key: str, ascending: bool, span: tuple, tokens: tuple) -> List[str]:
+def top_sample(data: pd.DataFrame, sample_size: int, key: str, ascending: bool):
     sample = data.nlargest(sample_size, key).sort_values(by=key, ascending=ascending)
-    html = [
-        f"<h2>Top {sample_size} rows</h2>",
-        sample_to_html(sample, span, tokens),
-    ]
-    return html
+    return sample
 
 
-def quantiles_html(data: pd.DataFrame, num_quantiles: int, sample_size: int, key: str, ascending: bool, span: tuple, tokens: tuple) -> List[str]:
-    html = []
+def bottom_sample(data: pd.DataFrame, sample_size: int, key: str, ascending: bool):
+    sample = data.nsmallest(sample_size, key).sort_values(by=key, ascending=ascending)
+    return sample
+
+
+def quantile_samples(data: pd.DataFrame, num_quantiles: int, sample_size: int, key: str, ascending: bool) -> List[Tuple[float, float, pd.DataFrame]]:
+    samples = []
 
     quantiles = np.linspace(0, 1, num_quantiles + 1)
     for i in range(num_quantiles) if ascending else range(num_quantiles-1, -1, -1):
@@ -135,14 +135,9 @@ def quantiles_html(data: pd.DataFrame, num_quantiles: int, sample_size: int, key
         q_end = quantiles[i + 1]
         quantile_data = data[(data[key] > data[key].quantile(q_start)) & (data[key] <= data[key].quantile(q_end))]
         sample = quantile_data.sample(min(sample_size, len(quantile_data)), random_state=1).sort_values(by=key, ascending=ascending)
-        if ascending:
-            html.append(f"<h2>Quantile {q_start * 100:.0f}-{q_end * 100:.0f}%</h2>")
-        else:
-            html.append(f"<h2>Quantile {q_end * 100:.0f}-{q_start * 100:.0f}%</h2>")
+        samples.append((float(q_start), float(q_end), sample))
 
-        html.append(sample_to_html(sample, span, tokens))
-
-    return html
+    return samples
 
 
 def colormap(score):
@@ -186,11 +181,28 @@ def sample_to_html(sample: pd.DataFrame, span: tuple, tokens: tuple):
 def generate_html(data: pd.DataFrame, sample_size: int, num_quantiles: int, key: str, ascending: bool = True, span: tuple = None, tokens: tuple = None, seed=None):
     html = [f"<html><body><h1>Strample: Random samples stratified by {key} (total {len(data)} rows; seed: {seed})</h1>"]
 
-    bottom = bottom_html(data, sample_size, key, ascending, span, tokens)
-    top = top_html(data, sample_size, key, ascending, span, tokens)
-    html.extend(bottom if ascending else top)
-    html.extend(quantiles_html(data, num_quantiles, sample_size, key, ascending, span, tokens))
-    html.extend(top if ascending else bottom)
+    quantile_data, top_data, bottom_data = make_samples(data, num_quantiles, sample_size, key, ascending)
+
+    bottom_html = [
+        f"<h2>Bottom {sample_size} rows</h2>",
+        sample_to_html(bottom_data, span, tokens)
+    ]
+
+    top_html = [
+        f"<h2>Top {sample_size} rows</h2>",
+        sample_to_html(top_data, span, tokens)
+    ]
+
+    html.extend(bottom_html if ascending else top_html)
+
+    for q_start, q_end, sample in quantile_data:
+        if ascending:
+            html.append(f"<h2>Quantile {q_start * 100:.0f}-{q_end * 100:.0f}%</h2>")
+        else:
+            html.append(f"<h2>Quantile {q_end * 100:.0f}-{q_start * 100:.0f}%</h2>")
+        html.append(sample_to_html(sample, span, tokens))
+
+    html.extend(top_html if ascending else bottom_html)
 
     html.append("</body></html>")
     return "".join(html)
