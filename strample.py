@@ -23,6 +23,10 @@ Another example:
 
 $ strample some_csv_file.csv --descending --quantiles 30 --key score
 
+In addition to html, you can also output the sampled data as csv, with added column 'strample' recording the quantile each row comes from:
+
+$ strample some_csv_file.csv --descending --quantiles 30 --key score --csv_out make_this_file_too.csv
+
 For various options (sort key, sample size, number of quantiles, ascending vs. descending, per-token coloration) see the help.
 
 """
@@ -38,6 +42,7 @@ def parse_arguments():
     parser.add_argument('-q', '--quantiles', type=int, default=10, help='Number of quantiles')
     parser.add_argument('--seed', type=int, default=None, help='Random seed.')
     parser.add_argument('--out', type=argparse.FileType('w'), default=None, help='Output file for .html; otherwise served in webbrowser.')
+    parser.add_argument('--csv_out', type=argparse.FileType('w'), default=None, help='Output file for .csv; otherwise no csv is generated.')
     parser.add_argument('--descending', action='store_true', required=False, help='To show samples in descending order.')
     parser.add_argument('-s', '--span', type=str, required=False, help='To highlight a single span, a csv triple of field names: text,start,end')
     parser.add_argument('--tokens', type=str, required=False, help='To highlight individual tokens by score, a csv triple of field names: text,token_scores,token_spans')
@@ -59,16 +64,6 @@ def main():
 
     logging.basicConfig(level=logging.INFO)
     logging.info(f'Random seed: {args.seed}')
-    np.random.seed(args.seed)
-
-    make_html = functools.partial(generate_html,
-                                  sample_size=args.sample_size,
-                                  num_quantiles=args.quantiles,
-                                  key=args.key,
-                                  ascending=not args.descending,
-                                  span=args.span,
-                                  tokens=args.tokens,
-                                  seed=args.seed)
 
     file, is_jsonl = peek_if_jsonl(args.file)
     data = pd.read_json(file, orient='records', lines=True) if is_jsonl else pd.read_csv(file)
@@ -76,15 +71,32 @@ def main():
     if args.key is None:
         args.key = get_first_numerical_column(data)
 
-    html_output = make_html(data)
 
-    if args.out:
-        args.out.write(html_output)
-    else:
-        with tempfile.NamedTemporaryFile('w', delete=False, suffix='.html') as f:
-            url = 'file://' + f.name
-            f.write(html_output)
-        webbrowser.open(url)
+    quantile_data = make_samples(data, args.quantiles, args.sample_size, args.key, not args.descending, seed=args.seed)
+
+    write_html(
+        quantile_data=quantile_data,
+        data=data,
+        sample_size=args.sample_size,
+        key=args.key,
+        ascending=not args.descending,
+        span=args.span,
+        tokens=args.tokens,
+        seed=args.seed,
+        outfile=args.out,
+    )
+
+    if args.csv_out:
+        write_csv(quantile_data, ascending=not args.descending, outfile=args.csv_out)
+
+
+def write_csv(quantile_data, ascending, outfile):
+    quantiles, top, bottom = quantile_data
+    if ascending:
+        bottom, top = top, bottom
+    samples = [top] + [sample for _, _, sample in quantiles] + [bottom]
+    concatenated = pd.concat(samples)
+    concatenated.to_csv(outfile)
 
 
 def peek_if_jsonl(file):
@@ -100,7 +112,7 @@ def peek_if_jsonl(file):
     return file, False
 
 
-def get_first_numerical_column(data: pd.DataFrame) -> Union[None, int]:
+def get_first_numerical_column(data: pd.DataFrame) -> Union[None, str]:
     numerical_columns = data.select_dtypes(include=[np.number]).columns
     if not any(numerical_columns):
         return None
@@ -108,7 +120,11 @@ def get_first_numerical_column(data: pd.DataFrame) -> Union[None, int]:
     return numerical_columns[0]
 
 
-def make_samples(data: pd.DataFrame, num_quantiles: int, sample_size: int, key: str, ascending: bool) -> Tuple[List[Tuple[float, float, pd.DataFrame]], pd.DataFrame, pd.DataFrame]:
+def make_samples(data: pd.DataFrame, num_quantiles: int, sample_size: int, key: str, ascending: bool, seed: int = None) -> Tuple[List[Tuple[float, float, pd.DataFrame]], pd.DataFrame, pd.DataFrame]:
+
+    if seed:
+        np.random.seed(seed)
+
     top = top_sample(data, sample_size, key, ascending)
     quans = quantile_samples(data, num_quantiles, sample_size, key, ascending)
     bot = bottom_sample(data, sample_size, key, ascending)
@@ -118,11 +134,13 @@ def make_samples(data: pd.DataFrame, num_quantiles: int, sample_size: int, key: 
 
 def top_sample(data: pd.DataFrame, sample_size: int, key: str, ascending: bool):
     sample = data.nlargest(sample_size, key).sort_values(by=key, ascending=ascending)
+    sample['strample'] = f'top'
     return sample
 
 
 def bottom_sample(data: pd.DataFrame, sample_size: int, key: str, ascending: bool):
     sample = data.nsmallest(sample_size, key).sort_values(by=key, ascending=ascending)
+    sample['strample'] = f'bottom'
     return sample
 
 
@@ -135,6 +153,7 @@ def quantile_samples(data: pd.DataFrame, num_quantiles: int, sample_size: int, k
         q_end = quantiles[i + 1]
         quantile_data = data[(data[key] > data[key].quantile(q_start)) & (data[key] <= data[key].quantile(q_end))]
         sample = quantile_data.sample(min(sample_size, len(quantile_data)), random_state=1).sort_values(by=key, ascending=ascending)
+        sample['strample'] = f'quantile_{i}'
         samples.append((float(q_start), float(q_end), sample))
 
     return samples
@@ -148,6 +167,7 @@ def colormap(score):
 
 
 def sample_to_html(sample: pd.DataFrame, span: tuple, tokens: tuple):
+    sample = sample[[col for col in sample.columns if col != 'strample']]
     for i, row in sample.iterrows():
         markers = {}
         if span:
@@ -178,10 +198,11 @@ def sample_to_html(sample: pd.DataFrame, span: tuple, tokens: tuple):
     return html
 
 
-def generate_html(data: pd.DataFrame, sample_size: int, num_quantiles: int, key: str, ascending: bool = True, span: tuple = None, tokens: tuple = None, seed=None):
-    html = [f"<html><body><h1>Strample: Random samples stratified by {key} (total {len(data)} rows; seed: {seed})</h1>"]
+def write_html(quantile_data: Tuple, data: pd.DataFrame, sample_size: int, key: str, ascending: bool = True, span: tuple = None, tokens: tuple = None, seed=None, outfile=None):
 
-    quantile_data, top_data, bottom_data = make_samples(data, num_quantiles, sample_size, key, ascending)
+    quantile_data, top_data, bottom_data = quantile_data
+
+    html = [f"<html><body><h1>Strample: Random samples stratified by {key} (total {len(data)} rows; seed: {seed})</h1>"]
 
     bottom_html = [
         f"<h2>Bottom {sample_size} rows</h2>",
@@ -205,7 +226,16 @@ def generate_html(data: pd.DataFrame, sample_size: int, num_quantiles: int, key:
     html.extend(top_html if ascending else bottom_html)
 
     html.append("</body></html>")
-    return "".join(html)
+    html_code = "".join(html)
+
+    if outfile:
+       outfile.write(html_code)
+    else:
+        with tempfile.NamedTemporaryFile('w', delete=False, suffix='.html') as f:
+            url = 'file://' + f.name
+            f.write(html_code)
+        webbrowser.open(url)
+
 
 
 class StringIteratorIO(io.TextIOBase):
