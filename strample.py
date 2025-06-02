@@ -13,6 +13,10 @@ import itertools
 import json
 import io
 
+import seaborn
+import matplotlib.pyplot as plt
+import base64
+
 """
 
 If you have a .csv file that you want to sample 'stratified' based on the first numerical column, do:
@@ -31,15 +35,22 @@ For various options (sort key, sample size, number of quantiles, ascending vs. d
 
 """
 
+N_DECIMALS = 5
+
 # TODO: Include basic stats, histogram etc? Integrate with pandas-profiling? And/or streamlit?
 # TODO: Allow more flexible quantile specification, e.g., 1,4,90,4,1
 
 def parse_arguments():
+    global N_DECIMALS
+
     parser = argparse.ArgumentParser(description='For .csv data, based on a numerical column --key, generate a simple HTML page with a sample per quantile.')
     parser.add_argument('file', nargs='?', type=argparse.FileType('r'), default=sys.stdin, help='Input csv or json file or stdin')
+    parser.add_argument('--title', type=str, default=None, help='String to use in the header. Will use filename if provided.')
     parser.add_argument('-k', '--key', type=str, default=None, help='Which value to sort, color and stratify by; first numerical column by default.')
     parser.add_argument('-n', '--sample_size', type=int, default=20, help='Number of rows per sub-table')
-    parser.add_argument('-q', '--quantiles', type=int, default=10, help='Number of quantiles')
+    parser.add_argument('-q', '--quantiles', nargs='+', type=int, default=[10], help='Number of quantiles; or space-separated list of quantile boundaries in percentage')
+    parser.add_argument('-d', '--decimals', type=int, default=5, help='Number of decimals for float values')
+    parser.add_argument('-c', '--colorize', action='store_true', required=False, help='To colormap the key column.')
     parser.add_argument('--seed', type=int, default=None, help='Random seed.')
     parser.add_argument('--out', type=argparse.FileType('w'), default=None, help='Output file for .html; otherwise served in webbrowser.')
     parser.add_argument('--csv_out', type=argparse.FileType('w'), default=None, help='Output file for .csv; otherwise no csv is generated.')
@@ -53,6 +64,17 @@ def parse_arguments():
     if args.tokens:
         text, scores, spans = args.tokens.split(',')
         args.tokens = (text, scores, spans)
+    if args.file != sys.stdin and not args.title:
+        args.title = args.file.name
+    if len(args.quantiles) == 1:
+        args.quantiles = np.linspace(0, 1, args.quantiles[0] + 1)
+    else:
+        args.quantiles = [q / 100 for q in args.quantiles]
+        if args.quantiles[0] != 0:
+            args.quantiles.insert(0, 0)
+        if args.quantiles[-1] != 1:
+            args.quantiles.append(1)
+    N_DECIMALS = args.decimals
     return args
 
 
@@ -71,7 +93,6 @@ def main():
     if args.key is None:
         args.key = get_first_numerical_column(data)
 
-
     quantile_data = make_samples(data, args.quantiles, args.sample_size, args.key, not args.descending, seed=args.seed)
 
     write_html(
@@ -84,6 +105,8 @@ def main():
         tokens=args.tokens,
         seed=args.seed,
         outfile=args.out,
+        colorize=args.colorize,
+        title=args.title,
     )
 
     if args.csv_out:
@@ -120,13 +143,13 @@ def get_first_numerical_column(data: pd.DataFrame) -> Union[None, str]:
     return numerical_columns[0]
 
 
-def make_samples(data: pd.DataFrame, num_quantiles: int, sample_size: int, key: str, ascending: bool, seed: int = None) -> Tuple[List[Tuple[float, float, pd.DataFrame]], pd.DataFrame, pd.DataFrame]:
+def make_samples(data: pd.DataFrame, quantiles: list[float], sample_size: int, key: str, ascending: bool, seed: int = None) -> Tuple[List[Tuple[float, float, pd.DataFrame]], pd.DataFrame, pd.DataFrame]:
 
     if seed:
         np.random.seed(seed)
 
     top = top_sample(data, sample_size, key, ascending)
-    quans = quantile_samples(data, num_quantiles, sample_size, key, ascending)
+    quans = quantile_samples(data, quantiles, sample_size, key, ascending)
     bot = bottom_sample(data, sample_size, key, ascending)
 
     return quans, top, bot
@@ -144,11 +167,10 @@ def bottom_sample(data: pd.DataFrame, sample_size: int, key: str, ascending: boo
     return sample
 
 
-def quantile_samples(data: pd.DataFrame, num_quantiles: int, sample_size: int, key: str, ascending: bool) -> List[Tuple[float, float, pd.DataFrame]]:
+def quantile_samples(data: pd.DataFrame, quantiles: list[float], sample_size: int, key: str, ascending: bool) -> List[Tuple[float, float, pd.DataFrame]]:
     samples = []
 
-    quantiles = np.linspace(0, 1, num_quantiles + 1)
-    for i in range(num_quantiles) if ascending else range(num_quantiles-1, -1, -1):
+    for i in range(len(quantiles) - 1) if ascending else range(len(quantiles)-1, -1, -1):
         q_start = quantiles[i]
         q_end = quantiles[i + 1]
         quantile_data = data[(data[key] > data[key].quantile(q_start)) & (data[key] <= data[key].quantile(q_end))]
@@ -159,15 +181,29 @@ def quantile_samples(data: pd.DataFrame, num_quantiles: int, sample_size: int, k
     return samples
 
 
-def colormap(score):
+def colormap_yellow(score):
     r = 'f'
     g = 'f'
     b = hex(round((1-score) * 15))[-1]
     return f'#{r}{g}{b}'
 
 
-def sample_to_html(sample: pd.DataFrame, span: tuple, tokens: tuple):
+def colormap_redgreen(score, minimum, maximum):
+
+    score = ((score - minimum) / (maximum - minimum))
+
+    score = max(0, min(1, score))
+
+    red = round((1 - score) * 255)
+    blue = round(score * 255)
+    
+    return f'#{red:02x}00{blue:02x}55'
+
+
+def sample_to_html(sample: pd.DataFrame, span: tuple, tokens: tuple, hue_col=None, hue_min=None, hue_max=None):
     sample = sample[[col for col in sample.columns if col != 'strample']]
+    float_format = f'{{:.{N_DECIMALS}f}}'.format
+
     for i, row in sample.iterrows():
         markers = {}
         if span:
@@ -188,30 +224,49 @@ def sample_to_html(sample: pd.DataFrame, span: tuple, tokens: tuple):
                 marked_text.append(text[offset:prev_offset])
                 marked_text.append(marker)
             sample.at[i, text_column] = ''.join(reversed(marked_text))
+
+        if hue_col is not None:
+            bgcolor = colormap_redgreen(row[hue_col], hue_min, hue_max)
+            sample.at[i, f'{hue_col}_str'] = f'<td style="background-color:{bgcolor};">{float_format(row["rating"])}</td>'
+
+    if hue_col is not None:
+        sample[hue_col] = sample[f'{hue_col}_str']
+        del sample[f'{hue_col}_str']
+
     columns_to_remove = []
     if span:
         columns_to_remove += [span[1], span[2]]
     if tokens:
         columns_to_remove += [tokens[1], tokens[2]]
     sample = sample[[col for col in sample.columns if col not in columns_to_remove]]
-    html = sample.to_html(index=False).replace('&lt;', '<').replace('&gt;', '>')
+    html = sample.to_html(index=False, float_format=float_format).replace('&lt;', '<').replace('&gt;', '>')
+    html = html.replace('<td><td', '<td').replace('</td></td>', '</td>')
+    html = html.replace('<tr style="text-align: right;">', '<tr style="text-align: left;">')
+    html = html.replace('<table', '<table style="width: 100%;"').replace('<th>rating</th>', f'<th style="width: {40 + N_DECIMALS * 10}pt;">rating</th>')
     return html
 
 
-def write_html(quantile_data: Tuple, data: pd.DataFrame, sample_size: int, key: str, ascending: bool = True, span: tuple = None, tokens: tuple = None, seed=None, outfile=None):
+def write_html(quantile_data: Tuple, data: pd.DataFrame, sample_size: int, key: str, ascending: bool = True, span: tuple = None, tokens: tuple = None, seed=None, outfile=None, colorize=False, title=None):
 
     quantile_data, top_data, bottom_data = quantile_data
+    colorize_kwargs = {'hue_col': key, 'hue_min': data[key].min(), 'hue_max': data[key].max()} if colorize else {}
 
-    html = [f"<html><body><h1>Strample: Random samples stratified by {key} (total {len(data)} rows; seed: {seed})</h1>"]
+    title = title or 'Strample'
+
+    html = [f"<html><body><h1>{title}</h1><h3>Total {len(data)} rows; seed: {seed}.</h3>"]
+
+    seaborn.displot(data=data, x=key, kind='kde', common_norm=False)
+    html_img = plot_to_html()
+    html.append(html_img)
 
     bottom_html = [
         f"<h2>Bottom {sample_size} rows</h2>",
-        sample_to_html(bottom_data, span, tokens)
+        sample_to_html(bottom_data, span, tokens, **colorize_kwargs)
     ]
 
     top_html = [
         f"<h2>Top {sample_size} rows</h2>",
-        sample_to_html(top_data, span, tokens)
+        sample_to_html(top_data, span, tokens, **colorize_kwargs)
     ]
 
     html.extend(bottom_html if ascending else top_html)
@@ -221,7 +276,7 @@ def write_html(quantile_data: Tuple, data: pd.DataFrame, sample_size: int, key: 
             html.append(f"<h2>Quantile {q_start * 100:.0f}-{q_end * 100:.0f}%</h2>")
         else:
             html.append(f"<h2>Quantile {q_end * 100:.0f}-{q_start * 100:.0f}%</h2>")
-        html.append(sample_to_html(sample, span, tokens))
+        html.append(sample_to_html(sample, span, tokens, **colorize_kwargs))
 
     html.extend(top_html if ascending else bottom_html)
 
@@ -236,6 +291,16 @@ def write_html(quantile_data: Tuple, data: pd.DataFrame, sample_size: int, key: 
             f.write(html_code)
         webbrowser.open(url)
 
+
+def plot_to_html():
+    """
+    https://stackoverflow.com/a/63381737
+    """
+    s = io.BytesIO()
+    plt.savefig(s, format='png', bbox_inches="tight")
+    plt.close()
+    plot_base64 = base64.b64encode(s.getvalue()).decode("utf-8").replace("\n", "")
+    return f'<img src="data:image/png;base64,{plot_base64}">'
 
 
 class StringIteratorIO(io.TextIOBase):
