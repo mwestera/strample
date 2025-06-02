@@ -9,7 +9,7 @@ authors = [{name="Matthijs Westera", email="m.westera@hum.leidenuniv.nl"}]
 description = "Sample rows per-quantile from csv, based on a numerical key/column."
 readme = "README.md"
 requires-python = ">=3.7"
-dependencies = ["pandas"]
+dependencies = ["pandas", "seaborn", "matplotlib"]
 
 [project.scripts]
 strample = "strample:main"

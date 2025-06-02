@@ -50,7 +50,7 @@ def parse_arguments():
     parser.add_argument('-n', '--sample_size', type=int, default=20, help='Number of rows per sub-table')
     parser.add_argument('-q', '--quantiles', nargs='+', type=int, default=[10], help='Number of quantiles; or space-separated list of quantile boundaries in percentage')
     parser.add_argument('-d', '--decimals', type=int, default=5, help='Number of decimals for float values')
-    parser.add_argument('-c', '--colorize', action='store_true', required=False, help='To colormap the key column.')
+    # parser.add_argument('-c', '--colorize', action='store_true', required=False, help='To colormap the key column.')
     parser.add_argument('--seed', type=int, default=None, help='Random seed.')
     parser.add_argument('--out', type=argparse.FileType('w'), default=None, help='Output file for .html; otherwise served in webbrowser.')
     parser.add_argument('--csv_out', type=argparse.FileType('w'), default=None, help='Output file for .csv; otherwise no csv is generated.')
@@ -105,7 +105,7 @@ def main():
         tokens=args.tokens,
         seed=args.seed,
         outfile=args.out,
-        colorize=args.colorize,
+        colorize=True,
         title=args.title,
     )
 
