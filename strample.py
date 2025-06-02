@@ -46,7 +46,6 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='For .csv data, based on a numerical column --key, generate a simple HTML page with a sample per quantile.')
     parser.add_argument('file', nargs='?', type=argparse.FileType('r'), default=sys.stdin, help='Input csv or json file or stdin')
     parser.add_argument('--title', type=str, default=None, help='String to use in the header. Will use filename if provided.')
-    parser.add_argument('-k', '--key', type=str, default=None, help='[Use --column instead.] Which value to sort, color and stratify by; first numerical column by default.')
     parser.add_argument('-c', '--column', type=str, default=None, help='Which value to sort, color and stratify by; first numerical column by default.')
     parser.add_argument('-n', '--sample_size', type=int, default=20, help='Number of rows per sub-table')
     parser.add_argument('-q', '--quantiles', nargs='+', type=int, default=[10], help='Number of quantiles; or space-separated list of quantile boundaries in percentage')
@@ -58,6 +57,7 @@ def parse_arguments():
     parser.add_argument('--descending', action='store_true', required=False, help='To show samples in descending order.')
     parser.add_argument('-s', '--span', type=str, required=False, help='To highlight a single span, a csv triple of field names: text,start,end')
     parser.add_argument('--tokens', type=str, required=False, help='To highlight individual tokens by score, a csv triple of field names: text,token_scores,token_spans')
+    parser.add_argument('-k', '--key', type=str, default=None, help='[To be removed; use --column instead.] Which value to sort, color and stratify by; first numerical column by default.')
     args = parser.parse_args()
     if args.key and not args.column:
         args.column = args.key
