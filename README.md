@@ -12,8 +12,6 @@ pip install pipx
 pipx install git+https://github.com/mwestera/strample
 ```
 
-![example_q.png](example_q.png)
-
 ## Basic Usage
 
 Simplest case using all default settings:
@@ -23,6 +21,8 @@ $ strample some_csv_file.csv
 ``` 
 
 This will find whichever is the first numerical column in the `.csv` file, and use that to sort and sample items from 10 quantiles, creating a temp html file displaying these samples (and a distplot) and opening it in the browser. 
+
+![example_q.png](example_q.png)
 
 There are some other options, like telling it to use the column `score` (instead of auto-detecting) and which quantiles to display:
 
