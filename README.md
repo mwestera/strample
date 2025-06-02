@@ -12,6 +12,8 @@ pip install pipx
 pipx install git+https://github.com/mwestera/strample
 ```
 
+![example_q.png](example_q.png)
+
 ## Basic Usage
 
 Simplest case using all default settings:
