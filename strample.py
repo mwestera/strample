@@ -77,6 +77,8 @@ def parse_arguments():
             args.quantiles.insert(0, 0)
         if args.quantiles[-1] != 1:
             args.quantiles.append(1)
+    if args.out:
+        logging.warning('There\'s something wrong with encoding in output html. Consider using without --out and then manual saving.')
     N_DECIMALS = args.decimals
     return args
 
