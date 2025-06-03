@@ -230,7 +230,7 @@ def sample_to_html(sample: pd.DataFrame, span: tuple, tokens: tuple, hue_col=Non
 
         if hue_col is not None:
             bgcolor = colormap_redgreen(row[hue_col], hue_min, hue_max)
-            sample.at[i, f'{hue_col}_str'] = f'<td style="background-color:{bgcolor};">{float_format(row["rating"])}</td>'
+            sample.at[i, f'{hue_col}_str'] = f'<td style="background-color:{bgcolor};">{float_format(row[hue_col])}</td>'
 
     if hue_col is not None:
         sample[hue_col] = sample[f'{hue_col}_str']
