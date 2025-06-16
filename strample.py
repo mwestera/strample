@@ -1,6 +1,8 @@
 import logging
 
 import pandas as pd
+import csv
+
 import numpy as np
 import sys
 import argparse
@@ -38,7 +40,6 @@ For various options (sort key, sample size, number of quantiles, ascending vs. d
 N_DECIMALS = 5
 
 # TODO: Include basic stats, histogram etc? Integrate with pandas-profiling? And/or streamlit?
-# TODO: Allow more flexible quantile specification, e.g., 1,4,90,4,1
 
 def parse_arguments():
     global N_DECIMALS
@@ -62,11 +63,9 @@ def parse_arguments():
     if args.key and not args.column:
         args.column = args.key
     if args.span:
-        text, start, end = args.span.split(',') # TODO make proper csv
-        args.span = (text, start, end)
+        args.span = next(csv.reader([args.span], delimiter=','))
     if args.tokens:
-        text, scores, spans = args.tokens.split(',')
-        args.tokens = (text, scores, spans)
+        args.tokens = next(csv.reader([args.tokens], delimiter=','))
     if args.file != sys.stdin and not args.title:
         args.title = args.file.name
     if len(args.quantiles) == 1:
@@ -92,8 +91,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
     logging.info(f'Random seed: {args.seed}')
 
-    file, is_jsonl = peek_if_jsonl(args.file)
-    data = pd.read_json(file, orient='records', lines=True) if is_jsonl else pd.read_csv(file)
+    data = read_jsonl_or_csv(args.file)
 
     if args.key is None:
         args.key = get_first_numerical_column(data)
@@ -118,6 +116,22 @@ def main():
         write_csv(quantile_data, ascending=not args.descending, outfile=args.csv_out)
 
 
+def read_jsonl_or_csv(file):
+    """
+    Auto-determine jsonl or csv and read the file with pandas; non-trivial to ensure compatibility with stdin.
+    """
+    file, peekfile = itertools.tee(file)
+    file = StringIteratorIO(file)
+    firstline = next(peekfile).strip()
+    try:
+        json.loads(firstline)
+    except (ValueError, json.JSONDecodeError):
+        df = pd.read_csv(file)
+    else:
+        df = pd.read_json(file, orient='records', lines=True)
+    return df
+
+
 def write_csv(quantile_data, ascending, outfile):
     quantiles, top, bottom = quantile_data
     if ascending:
@@ -125,19 +139,6 @@ def write_csv(quantile_data, ascending, outfile):
     samples = [top] + [sample for _, _, sample in quantiles] + [bottom]
     concatenated = pd.concat(samples)
     concatenated.to_csv(outfile)
-
-
-def peek_if_jsonl(file):
-    file, peekfile = itertools.tee(file)
-    firstline = next(peekfile)
-    file = StringIteratorIO(file)
-    try:
-        d = json.loads(firstline.strip())
-        if isinstance(d, dict):
-            return file, True
-    except json.JSONDecodeError:
-        pass
-    return file, False
 
 
 def get_first_numerical_column(data: pd.DataFrame) -> Union[None, str]:
@@ -218,7 +219,7 @@ def sample_to_html(sample: pd.DataFrame, span: tuple, tokens: tuple, hue_col=Non
         if tokens:
             tokenmarkers = markers.setdefault(tokens[0], [])
             for score, (start, end) in zip(row[tokens[1]], row[tokens[2]]):
-                tokenmarkers.append((start, f'<span style="background-color:{colormap(score)};">'))
+                tokenmarkers.append((start, f'<span style="background-color:{colormap_yellow(score)};">'))
                 tokenmarkers.append((end, f'</span>'))
         for text_column, markers in markers.items():
             text = row[text_column]
